@@ -598,7 +598,12 @@ def main():
                         if args.optimize_on_cpu:
                             copy_optimizer_params_to_model(model.named_parameters(), param_optimizer)
                     else:
+                        if args.optimize_on_cpu:
+                            is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
                         optimizer.step()
+                        if args.optimize_on_cpu:
+                            copy_optimizer_params_to_model(model.named_parameters(), param_optimizer)
+
                     model.zero_grad()
                     global_step += 1
 
