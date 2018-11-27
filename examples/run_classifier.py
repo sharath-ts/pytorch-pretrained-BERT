@@ -581,13 +581,13 @@ def main():
                             # scale down gradients for fp16 training
                             for param in model.parameters():
                                 param.grad.data = param.grad.data / args.loss_scale
-                        if args.optimize_on_cpu:
-                            is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
-                        else:
-                            is_nan = False
-                            for name, param_model in model.named_parameters():
-                                if torch.isnan(param_model.grad).sum():
-                                    is_nan = True
+                        #if args.optimize_on_cpu:
+                        is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
+                        #else:
+                        #    is_nan = False
+                        #    for name, param_model in model.named_parameters():
+                        #        if torch.isnan(param_model.grad).sum():
+                        #            is_nan = True
 
                         if is_nan:
                             logger.info("FP16 TRAINING: Nan in gradients, reducing loss scaling")
@@ -595,8 +595,8 @@ def main():
                             model.zero_grad()
                             continue
                         optimizer.step()
-                        if args.optimize_on_cpu:
-                            copy_optimizer_params_to_model(model.named_parameters(), param_optimizer)
+                        #if args.optimize_on_cpu:
+                        copy_optimizer_params_to_model(model.named_parameters(), param_optimizer)
                     else:
                         if args.optimize_on_cpu:
                             is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
