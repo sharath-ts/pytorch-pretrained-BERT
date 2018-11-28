@@ -24,6 +24,7 @@ import logging
 import argparse
 import random
 from tqdm import tqdm, trange
+import time
 
 import numpy as np
 import torch
@@ -420,6 +421,10 @@ def main():
                         default=False,
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
+    parser.add_argument('--gradient_checkpointing',
+                        default=False,
+                        action='store_true',
+                        help="Whether to use gradient checkpointing")
     parser.add_argument('--loss_scale',
                         type=float, default=128,
                         help='Loss scaling, positive power of 2 values can improve fp16 convergence.')
@@ -559,10 +564,11 @@ def main():
             nb_tr_examples, nb_tr_steps = 0, 0
             print("\n\nlength of data", len(train_dataloader))
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
+                train_start = time.time()
                 batch = tuple(t.to(device) for t in batch)
                 # print("batch", [i.shape for i in batch])
                 input_ids, input_mask, segment_ids, label_ids = batch
-                loss, _ = model(input_ids, segment_ids, input_mask, label_ids)
+                loss, _ = model(input_ids, segment_ids, input_mask, label_ids, args.gradient_checkpointing)
                 if n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
                 if args.fp16 and args.loss_scale != 1.0:
@@ -575,7 +581,10 @@ def main():
                 tr_loss += loss.item()
                 nb_tr_examples += input_ids.size(0)
                 nb_tr_steps += 1
+                train_end = time.time()
+                print("time for forward - backward {}".format(train_end - train_start))
                 if (step + 1) % args.gradient_accumulation_steps == 0:
+                    update_start = time.time()
                     if args.fp16:
                         if args.fp16 and args.loss_scale != 1.0:
                             # scale down gradients for fp16 training
@@ -604,8 +613,11 @@ def main():
                         if args.optimize_on_cpu:
                             copy_optimizer_params_to_model(model.named_parameters(), param_optimizer)
 
+
                     model.zero_grad()
                     global_step += 1
+                    update_end = time.time()
+                    print("time for update {}".format(update_end - update_start))
 
     if args.do_eval:
         eval_examples = processor.get_dev_examples(args.data_dir)

@@ -30,6 +30,7 @@ import shutil
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
+from .checkpoint import checkpoint
 
 from .file_utils import cached_path
 
@@ -316,19 +317,56 @@ class BertLayer(nn.Module):
         return layer_output
 
 
+# class BertEncoder(nn.Module):
+#     def __init__(self, config):
+#         super(BertEncoder, self).__init__()
+#         layer = BertLayer(config)
+#         self.layer = nn.ModuleList([copy.deepcopy(layer) for _ in range(config.num_hidden_layers)])
+#
+#     def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True):
+#         all_encoder_layers = []
+#         for layer_module in self.layer:
+#             hidden_states = layer_module(hidden_states, attention_mask)
+#             if output_all_encoded_layers:
+#                 all_encoder_layers.append(hidden_states)
+#         if not output_all_encoded_layers:
+#             all_encoder_layers.append(hidden_states)
+#         return all_encoder_layers
+
 class BertEncoder(nn.Module):
     def __init__(self, config):
         super(BertEncoder, self).__init__()
         layer = BertLayer(config)
-        self.layer = nn.ModuleList([copy.deepcopy(layer) for _ in range(config.num_hidden_layers)])    
+        self.layer = nn.ModuleList([copy.deepcopy(layer) for _ in range(config.num_hidden_layers)])
 
-    def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True):
+    def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True, grad_checkpointing=False):
         all_encoder_layers = []
-        for layer_module in self.layer:
-            hidden_states = layer_module(hidden_states, attention_mask)
-            if output_all_encoded_layers:
-                all_encoder_layers.append(hidden_states)
-        if not output_all_encoded_layers:
+        def custom(start, end):
+            def custom_forward(*inputs):
+                layers = self.layer[start:end]
+                x_ = inputs[0]
+                for layer in layers:
+                    x_ = layer(x_, inputs[1])
+                return x_
+            return custom_forward
+
+        # set checkpointing
+        if self.training and grad_checkpointing:
+            l = 0
+            num_layers = len(self.layer)
+            chunk_length = math.ceil(math.sqrt(num_layers))
+            while l < num_layers:
+                hidden_states = checkpoint(custom(l, l+chunk_length), hidden_states, attention_mask)
+                l += chunk_length
+            # decoder layers
+        else:
+            for i,layer_module in enumerate(self.layer):
+                hidden_states = layer_module(hidden_states, attention_mask)
+
+                if output_all_encoded_layers:
+                    all_encoder_layers.append(hidden_states)
+
+        if not output_all_encoded_layers or grad_checkpointing:
             all_encoder_layers.append(hidden_states)
         return all_encoder_layers
 
@@ -585,7 +623,7 @@ class BertModel(PreTrainedBertModel):
         self.pooler = BertPooler(config)
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, output_all_encoded_layers=True):
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, output_all_encoded_layers=True, grad_checkpointing=False):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
@@ -609,7 +647,7 @@ class BertModel(PreTrainedBertModel):
         embedding_output = self.embeddings(input_ids, token_type_ids)
         encoded_layers = self.encoder(embedding_output,
                                       extended_attention_mask,
-                                      output_all_encoded_layers=output_all_encoded_layers)
+                                      output_all_encoded_layers=output_all_encoded_layers, grad_checkpointing=grad_checkpointing)
         sequence_output = encoded_layers[-1]
         pooled_output = self.pooler(sequence_output)
         if not output_all_encoded_layers:
@@ -864,8 +902,8 @@ class BertForSequenceClassification(PreTrainedBertModel):
         self.classifier = nn.Linear(config.hidden_size, num_labels)
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
-        _, pooled_output = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None, grad_checkpointing=False):
+        _, pooled_output = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False, grad_checkpointing=grad_checkpointing)
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
 
