@@ -514,7 +514,7 @@ def main():
             param_optimizer = [(n, param.clone().detach().to('cpu').float().requires_grad_()) \
                                for n, param in model.named_parameters()]
         else:
-            param_optimizer = [(n, param.clone().detach().float().requires_grad_()) \
+            param_optimizer = [(n, param.clone().detach().to(device).float().requires_grad_()) \
                             for n, param in model.named_parameters()]
     elif args.optimize_on_cpu:
         param_optimizer = [(n, param.clone().detach().to('cpu').float().requires_grad_()) \
@@ -586,17 +586,11 @@ def main():
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     update_start = time.time()
                     if args.fp16:
-                        if args.fp16 and args.loss_scale != 1.0:
+                        if args.loss_scale != 1.0:
                             # scale down gradients for fp16 training
                             for param in model.parameters():
                                 param.grad.data = param.grad.data / args.loss_scale
-                        #if args.optimize_on_cpu:
                         is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
-                        #else:
-                        #    is_nan = False
-                        #    for name, param_model in model.named_parameters():
-                        #        if torch.isnan(param_model.grad).sum():
-                        #            is_nan = True
 
                         if is_nan:
                             logger.info("FP16 TRAINING: Nan in gradients, reducing loss scaling")
@@ -604,7 +598,6 @@ def main():
                             model.zero_grad()
                             continue
                         optimizer.step()
-                        #if args.optimize_on_cpu:
                         copy_optimizer_params_to_model(model.named_parameters(), param_optimizer)
                     else:
                         if args.optimize_on_cpu:
