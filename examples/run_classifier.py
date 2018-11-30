@@ -319,7 +319,7 @@ def copy_optimizer_params_to_model(named_params_model, named_params_optimizer):
             raise ValueError
         param_model.data.copy_(param_opti.data)
 
-def set_optimizer_params_grad(named_params_optimizer, named_params_model, test_nan=False):
+def set_optimizer_params_grad(named_params_optimizer, named_params_model, args, test_nan=False):
     """ Utility function for optimize_on_cpu and 16-bits training.
         Copy the gradient of the GPU parameters to the CPU/RAMM copy of the model
     """
@@ -334,6 +334,9 @@ def set_optimizer_params_grad(named_params_optimizer, named_params_model, test_n
             if param_opti.grad is None:
                 param_opti.grad = torch.nn.Parameter(param_opti.data.new().resize_(*param_opti.data.size()))
             param_opti.grad.data.copy_(param_model.grad.data)
+            if args.fp16 and args.loss_scale != 1.0:
+                # scale down gradients for fp16 training
+                param_opti.grad.data /= args.loss_scale
         else:
             param_opti.grad = None
     return is_nan
@@ -586,11 +589,8 @@ def main():
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     update_start = time.time()
                     if args.fp16:
-                        if args.loss_scale != 1.0:
-                            # scale down gradients for fp16 training
-                            for param in model.parameters():
-                                param.grad.data = param.grad.data / args.loss_scale
-                        is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
+
+                        is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), args, test_nan=True)
 
                         if is_nan:
                             logger.info("FP16 TRAINING: Nan in gradients, reducing loss scaling")
